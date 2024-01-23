@@ -53,8 +53,3 @@ After adding the role to the requirements and installing we can proceed to call 
       roles:
         - {role: stuart.falcon, tags: role-falcon}
 ```
-
-Author Information
-------------------
-
-This role was created while working for Stuart Delivery.
