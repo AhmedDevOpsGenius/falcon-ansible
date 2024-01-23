@@ -1,0 +1,72 @@
+---
+##  Interacts with webservices to get Oauth token
+- name: Include secrets
+  include_vars: ../defaults/secrets.yml
+  no_log: true
+
+- name: Verify Temporary Install Directory Exists
+  tempfile:
+    path: "{{ falcon_install_tmp_dir }}"
+    state: directory
+    suffix: falcon
+  when:
+    - falcon_install_tmp_dir is defined
+  register: falcon_install_temp_directory
+  changed_when: false
+
+- name: Authenticate to CrowdStrike API
+  uri:
+    url: "https://{{ falcon_cloud }}/oauth2/token"
+    method: POST
+    body_format: json
+    body: "client_id={{ falcon_client_id }}&client_secret={{ falcon_client_secret }}"
+    return_content: true
+    follow_redirects: all
+    status_code: 201
+    headers:
+      content-type: application/x-www-form-urlencoded
+  register: falcon_api_oauth2_token
+  no_log: true
+
+- name: "Default Operating System configuration"
+  set_fact:
+    falcon_target_os: "{{ ansible_facts['distribution'] }}"
+    falcon_os_family: "{{ ansible_facts['system'] | lower }}"
+    falcon_os_version: "*{{ ansible_facts['distribution_major_version'] }}*"
+    falcon_sensor_update_policy_platform: "{{ ansible_facts['system'] }}"
+    falcon_os_vendor: "{{ ansible_facts['os_family'] | lower if (ansible_facts['os_family'] == 'RedHat' and ansible_facts['distribution'] != 'Amazon') else ansible_facts['distribution'] | lower }}"
+
+- name: "Determine Operating System Architecture (Linux)"
+  set_fact:
+    falcon_os_arch: "{{ falcon_os_arch_dict[ansible_facts['architecture']] }}"
+  when: ansible_facts['system'] == "Linux"
+
+- name: "Build API Sensor Query"
+  set_fact:
+    falcon_os_query: '{{ ''os:"'' + falcon_target_os + ''"+os_version:"'' + falcon_os_version + falcon_os_arch }}'
+
+- name: Get list of filtered Falcon sensors
+  uri:
+    url: "https://{{ falcon_cloud }}/sensors/combined/installers/v1?filter={{ falcon_os_query | urlencode }}"
+    method: GET
+    return_content: true
+    headers:
+      authorization: "Bearer {{ falcon_api_oauth2_token.json.access_token }}"
+      Content-Type: application/json
+  register: falcon_api_installer_list
+  no_log: true
+
+- name: Download Falcon Sensor Installation Package
+  get_url:
+    url: "https://{{ falcon_cloud }}/sensors/entities/download-installer/v1?id={{ falcon_api_installer_list.json.resources[falcon_sensor_version_decrement | int].sha256 }}"
+    dest: "{{ falcon_install_temp_directory.path }}"
+    checksum: "sha256:{{ falcon_api_installer_list.json.resources[falcon_sensor_version_decrement | int].sha256 }}"
+    mode: 0640
+    headers:
+      authorization: "Bearer {{ falcon_api_oauth2_token.json.access_token }}"
+  changed_when: false
+  register: falcon_sensor_download
+
+- name: Set full file download path
+  set_fact:
+    falcon_sensor_pkg: "{{ falcon_sensor_download.dest }}"
